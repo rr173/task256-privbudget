@@ -99,3 +99,61 @@ func TestServiceIntegration(t *testing.T) {
 		t.Fatalf("selfcheck issues: %v", issues)
 	}
 }
+
+// TestUpdateDatasetBudgetSync 验证：已有发布消耗预算后修改 ε 上限时，派生状态必须
+// 立即同步——调低到当前消耗以下转为 overlimit；仍能覆盖消耗则保持 releasable。
+// 回归点：修复前 UpdateDataset 不刷新状态，会展示按旧上限得出的过期结论。
+func TestUpdateDatasetBudgetSync(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp(st)
+
+	pop := model.DatasetVersion{ID: "ds", Name: "pop", Version: "v1", Status: model.DatasetRegistered, EpsilonCap: 1.0, DeltaCap: 1e-5}
+	if err := app.RegisterDataset(ctx, pop); err != nil {
+		t.Fatal(err)
+	}
+	m := model.Mechanism{ID: "m1", Kind: model.MechLaplace, Epsilon: 0.6, Delta: 0, DatasetIDs: []string{"ds"}, Status: model.MechDraft}
+	if err := app.RegisterMechanism(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.VerifyMechanism(ctx, "m1"); err != nil {
+		t.Fatal(err)
+	}
+	rel := model.Release{ID: "r1", MechanismID: "m1", Rule: model.RuleSequential, Status: model.ReleasePending}
+	if err := app.CreateRelease(ctx, rel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.EvaluateRelease(ctx, "r1"); err != nil {
+		t.Fatal(err)
+	}
+	// 已消耗 ε=0.6，上限 1.0 → 可发布
+	if got, _ := app.GetDataset(ctx, "ds"); got.Status != model.DatasetReleasable {
+		t.Fatalf("after release expected releasable, got %s", got.Status)
+	}
+
+	// 调低上限到 0.5（低于当前消耗 0.6）→ 应立即转为 overlimit
+	cur, _ := app.GetDataset(ctx, "ds")
+	cur.EpsilonCap = 0.5
+	if err := app.UpdateDataset(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := app.GetDataset(ctx, "ds")
+	if got.Status != model.DatasetOverlimit {
+		t.Fatalf("after lowering cap below consumption expected overlimit, got %s", got.Status)
+	}
+
+	// 调高上限回到 1.0（仍能覆盖消耗 0.6）→ 应恢复为 releasable
+	cur, _ = app.GetDataset(ctx, "ds")
+	cur.EpsilonCap = 1.0
+	if err := app.UpdateDataset(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = app.GetDataset(ctx, "ds")
+	if got.Status != model.DatasetReleasable {
+		t.Fatalf("after raising cap above consumption expected releasable, got %s", got.Status)
+	}
+}

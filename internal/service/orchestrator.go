@@ -94,10 +94,17 @@ func (a *App) ListDatasets(ctx context.Context) ([]model.DatasetVersion, error) 
 }
 
 // UpdateDataset 更新数据集版本。
+//
+// ε/δ 上限是预算状态的输入：已有发布已消耗预算时，调低上限可能令当前
+// 消耗超过新上限（应立即转为 overlimit），调高或保持仍能覆盖消耗则应保持
+// 可发布。更新字段后必须刷新派生状态，否则展示的是按旧上限得出的过期结论。
 func (a *App) UpdateDataset(ctx context.Context, d model.DatasetVersion) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.datasets.Update(ctx, d)
+	if err := a.datasets.Update(ctx, d); err != nil {
+		return err
+	}
+	return a.refreshStatuses(ctx)
 }
 
 // SealDataset 封存数据集版本。
