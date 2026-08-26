@@ -19,6 +19,8 @@ type Service struct {
 func New(s *store.Store) *Service { return &Service{store: s} }
 
 // Register 登记一个统计机制（参数非法直接报错，不落库）。
+// 引用已封存数据集的机制一律拒绝：封存后任何新机制只要作用于该数据集，
+// 都必须在落库前拒绝，确保不留下机制记录。
 func (s *Service) Register(ctx context.Context, m model.Mechanism) error {
 	if m.ID == "" {
 		return fmt.Errorf("mechanism id required")
@@ -26,10 +28,36 @@ func (s *Service) Register(ctx context.Context, m model.Mechanism) error {
 	if err := validateParams(m); err != nil {
 		return err
 	}
+	if err := s.checkDatasetsNotSealed(ctx, m.DatasetIDs); err != nil {
+		return err
+	}
 	if m.Status == "" {
 		m.Status = model.MechDraft
 	}
 	return s.store.MechanismCreate(ctx, m)
+}
+
+// checkDatasetsNotSealed 确保机制引用的数据集均未封存。
+// 机制登记是创建机制记录的唯一入口，在此处拦截可保证封存数据集上
+// 不会留下任何新机制记录；缺失数据集留给 Verify 阶段处理，维持原有行为。
+func (s *Service) checkDatasetsNotSealed(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	all, err := s.store.DatasetList(ctx)
+	if err != nil {
+		return err
+	}
+	byID := make(map[string]model.DatasetVersion, len(all))
+	for _, d := range all {
+		byID[d.ID] = d
+	}
+	for _, did := range ids {
+		if d, ok := byID[did]; ok && d.IsSealed() {
+			return model.ErrDatasetSealed
+		}
+	}
+	return nil
 }
 
 // Get 按 ID 取机制。
@@ -42,13 +70,18 @@ func (s *Service) List(ctx context.Context) ([]model.Mechanism, error) {
 	return s.store.MechanismList(ctx)
 }
 
-// Verify 校验机制参数并确认其引用的数据集均存在，通过后置为已验证。
+// Verify 校验机制参数并确认其引用的数据集均存在且未封存，通过后置为已验证。
+// 封存数据集上的机制不应被验证通过：即便历史遗留的机制记录存在，
+// 封存后也禁止使其成为有效预算来源。
 func (s *Service) Verify(ctx context.Context, id string) error {
 	m, err := s.store.MechanismGet(ctx, id)
 	if err != nil {
 		return err
 	}
 	if err := validateParams(m); err != nil {
+		return err
+	}
+	if err := s.checkDatasetsNotSealed(ctx, m.DatasetIDs); err != nil {
 		return err
 	}
 	all, err := s.store.DatasetList(ctx)
