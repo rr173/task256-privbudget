@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -97,5 +98,81 @@ func TestServiceIntegration(t *testing.T) {
 	}
 	if len(issues) != 1 || issues[0] != "ok" {
 		t.Fatalf("selfcheck issues: %v", issues)
+	}
+}
+
+// TestEvaluateReleaseSealedDatasetBoundary 验证封存发布边界：
+// 数据集封存后，即便引用它的机制仍有效，对其产生的新发布评估必须失败，
+// 发布保持待评估状态，且已有预算与历史发布不被改变。
+func TestEvaluateReleaseSealedDatasetBoundary(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp(st)
+
+	pop := model.DatasetVersion{ID: "ds_seal", Name: "pop", Version: "v1", Status: model.DatasetRegistered, EpsilonCap: 1.0, DeltaCap: 1e-5}
+	if err := app.RegisterDataset(ctx, pop); err != nil {
+		t.Fatal(err)
+	}
+	m := model.Mechanism{ID: "m_seal", Kind: model.MechLaplace, Epsilon: 0.3, Delta: 0, DatasetIDs: []string{"ds_seal"}, Status: model.MechDraft}
+	if err := app.RegisterMechanism(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.VerifyMechanism(ctx, "m_seal"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 历史发布 r_prev：封存前评估通过，作为后续断言“历史发布不被改变”的基线。
+	rPrev := model.Release{ID: "r_prev", MechanismID: "m_seal", Rule: model.RuleSequential, Status: model.ReleasePending}
+	if err := app.CreateRelease(ctx, rPrev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.EvaluateRelease(ctx, "r_prev"); err != nil {
+		t.Fatal(err)
+	}
+	rPrevGot, _ := app.GetRelease(ctx, "r_prev")
+	if rPrevGot.Status != model.ReleaseAllowed {
+		t.Fatalf("r_prev expected allowed, got %s", rPrevGot.Status)
+	}
+
+	// 封存数据集
+	if err := app.SealDataset(ctx, "ds_seal"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 对同一有效机制产生的新发布：评估必须失败
+	rAfter := model.Release{ID: "r_after", MechanismID: "m_seal", Rule: model.RuleSequential, Status: model.ReleasePending}
+	if err := app.CreateRelease(ctx, rAfter); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.EvaluateRelease(ctx, "r_after"); !errors.Is(err, model.ErrDatasetSealed) {
+		t.Fatalf("expected ErrDatasetSealed after sealing dataset, got %v", err)
+	}
+
+	// 发布仍保持待评估状态（未设置评估时间、未推进为 allowed/rejected）
+	rAfterGot, _ := app.GetRelease(ctx, "r_after")
+	if rAfterGot.Status != model.ReleasePending {
+		t.Fatalf("r_after expected pending after failed evaluation, got %s", rAfterGot.Status)
+	}
+	if rAfterGot.EvaluatedAt != nil {
+		t.Fatalf("r_after expected no evaluated_at, got %v", rAfterGot.EvaluatedAt)
+	}
+
+	// 历史发布 r_prev 不被改变（封存不应回溯影响已发布的发布）
+	rPrevGot2, _ := app.GetRelease(ctx, "r_prev")
+	if rPrevGot2.Status != model.ReleaseAllowed {
+		t.Fatalf("r_prev expected to remain allowed, got %s", rPrevGot2.Status)
+	}
+
+	// 已有预算不受影响：r_prev 的消耗仍计入，但不超限（0.3 ≤ 1.0）
+	rep, err := app.EvaluateBudget(ctx, model.RuleSequential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Overlimited {
+		t.Fatalf("budget should remain within limits, got overlimit: %+v", rep.Entries)
 	}
 }

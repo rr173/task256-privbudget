@@ -183,6 +183,12 @@ func (a *App) EvaluateRelease(ctx context.Context, releaseID string) (*compose.R
 	if err != nil {
 		return nil, err
 	}
+	// 封存发布边界：数据集一旦封存即被冻结，即便引用它的机制仍有效，
+	// 也不得再对其产生新的发布。此时评估必须失败，发布保持待评估状态，
+	// 已有预算与历史发布保持不变。
+	if sealedID, ok := sealedDatasetReferenced(m, w.Datasets); ok {
+		return nil, fmt.Errorf("%w: dataset %s is sealed", model.ErrDatasetSealed, sealedID)
+	}
 	decided := release.Decide(r, m, rep)
 	if err := a.releases.ApplyDecision(ctx, decided); err != nil {
 		return nil, err
@@ -191,6 +197,21 @@ func (a *App) EvaluateRelease(ctx context.Context, releaseID string) (*compose.R
 		return nil, err
 	}
 	return rep, nil
+}
+
+// sealedDatasetReferenced 报告机制消费的数据集中是否有任意一个已被封存。
+// 返回 (sealedID, true) 指示首个命中的封存数据集；否则返回 ("", false)。
+func sealedDatasetReferenced(m model.Mechanism, datasets []model.DatasetVersion) (string, bool) {
+	byID := make(map[string]model.DatasetVersion, len(datasets))
+	for _, d := range datasets {
+		byID[d.ID] = d
+	}
+	for _, did := range m.DatasetIDs {
+		if d, ok := byID[did]; ok && d.IsSealed() {
+			return d.ID, true
+		}
+	}
+	return "", false
 }
 
 // RevokeRelease 撤销已允许的发布并刷新预算状态。
