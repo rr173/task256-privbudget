@@ -69,6 +69,36 @@ func TestGraphRootPropagation(t *testing.T) {
 	}
 }
 
+func TestEvaluateDuplicateDatasetNotDoubleBilled(t *testing.T) {
+	// 机制重复声明同一数据集 ds（顺序组合 + 并行组合均只应计费一次）。
+	ds := []model.DatasetVersion{
+		{ID: "ds", EpsilonCap: 0.5, DeltaCap: 1},
+	}
+	ms := []model.Mechanism{
+		{ID: "M", Kind: model.MechLaplace, Epsilon: 0.4, Delta: 0, DatasetIDs: []string{"ds", "ds", "ds"}, Status: model.MechVerified},
+	}
+	rs := []model.Release{
+		{ID: "R", MechanismID: "M", Rule: model.RuleSequential, Status: model.ReleaseAllowed},
+	}
+	for _, rule := range []model.CompositionRule{model.RuleSequential, model.RuleParallel} {
+		rep, err := Evaluate(World{Datasets: ds, Mechanisms: ms, Releases: rs}, rule)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rep.Overlimited {
+			t.Fatalf("rule %s: 重复声明不应误触超限: %+v", rule, rep.Entries)
+		}
+		for _, e := range rep.Entries {
+			if e.EpsilonUsed > 0.4+1e-9 {
+				t.Fatalf("rule %s: 重复计费，期望 ε=0.4，实际 %v", rule, e.EpsilonUsed)
+			}
+			if len(e.Contributors) != 1 || e.Contributors[0] != "R" {
+				t.Fatalf("rule %s: 贡献者应为单个 R，实际 %+v", rule, e.Contributors)
+			}
+		}
+	}
+}
+
 func TestEvaluateParallelVsSequential(t *testing.T) {
 	// D(根,cap0.3) ← C(cap1.0)；机制消费 C，ε=0.6。
 	// 顺序组合向上传播到 D(cap0.3) → 超限；并行组合按 C(cap1.0) → 不超限。

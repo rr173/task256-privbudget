@@ -74,7 +74,14 @@ func Evaluate(world World, rule model.CompositionRule) (*Report, error) {
 					model.ErrMechanismInvalid, r.ID)
 			}
 		}
+		// 同一发布内对数据集去重：机制即便重复声明同一数据集，
+		// 也只对该数据集计费一次，避免单次发布被重复扣减或误触超限。
+		seen := make(map[string]bool, len(m.DatasetIDs))
 		for _, did := range m.DatasetIDs {
+			if seen[did] {
+				continue
+			}
+			seen[did] = true
 			d, ok := datasetByID[did]
 			if !ok {
 				continue

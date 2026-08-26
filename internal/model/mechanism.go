@@ -52,3 +52,21 @@ func (m Mechanism) Clone() Mechanism {
 func KnownMechanismKinds() []MechanismKind {
 	return []MechanismKind{MechLaplace, MechGaussian, MechExponential, MechCount}
 }
+
+// DedupDatasetIDs 按首次出现顺序去重：同一数据集即使重复声明，
+// 对该数据集的预算消耗也只计一次。
+func DedupDatasetIDs(ids []string) []string {
+	if len(ids) <= 1 {
+		return append([]string(nil), ids...)
+	}
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}

@@ -29,6 +29,8 @@ func (s *Service) Register(ctx context.Context, m model.Mechanism) error {
 	if m.Status == "" {
 		m.Status = model.MechDraft
 	}
+	// 规范化数据集声明：去重，避免重复声明在预算计费时被放大。
+	m.DatasetIDs = model.DedupDatasetIDs(m.DatasetIDs)
 	return s.store.MechanismCreate(ctx, m)
 }
 
