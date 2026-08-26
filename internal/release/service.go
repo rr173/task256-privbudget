@@ -26,7 +26,10 @@ func knownRule(rule model.CompositionRule) bool {
 	return false
 }
 
-// Create 创建发布批次（默认 pending），校验引用的机制存在且规则合法。
+// Create 创建发布批次。新发布一律进入待评估状态，忽略客户端传入的
+// status 及已评估字段（evaluated_at / overlimit_path）——防止客户端绕过
+// 评估直接创建 allowed/rejected 发布而立即计入预算消耗。只有评估流程
+// （EvaluateRelease → ApplyDecision）才能把发布推进到 allowed/rejected。
 func (s *Service) Create(ctx context.Context, r model.Release) error {
 	if r.ID == "" {
 		return fmt.Errorf("release id required")
@@ -37,9 +40,9 @@ func (s *Service) Create(ctx context.Context, r model.Release) error {
 	if _, err := s.store.MechanismGet(ctx, r.MechanismID); err != nil {
 		return model.ErrMechanismMissing
 	}
-	if r.Status == "" {
-		r.Status = model.ReleasePending
-	}
+	r.Status = model.ReleasePending
+	r.EvaluatedAt = nil
+	r.OverlimitPath = nil
 	return s.store.ReleaseCreate(ctx, r)
 }
 
