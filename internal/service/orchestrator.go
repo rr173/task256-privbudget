@@ -123,11 +123,19 @@ func (a *App) VerifyMechanism(ctx context.Context, id string) error {
 	return a.mechs.Verify(ctx, id)
 }
 
-// RevokeMechanism 撤销机制。
+// RevokeMechanism 撤销机制并刷新受影响数据集的预算状态。
+//
+// 撤销一个被已允许发布所使用的机制后，该机制不再计入实时预算
+// （compose.Evaluate 通过 IsLive() 跳过其贡献）。此处随即刷新各未封存
+// 数据集的派生状态，使其立即恢复到正确的预算状态——否则此前因该机制
+// 贡献而被判为 tense/overlimit 的数据集会停留在陈旧状态，与实时预算不一致。
 func (a *App) RevokeMechanism(ctx context.Context, id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.mechs.Revoke(ctx, id)
+	if err := a.mechs.Revoke(ctx, id); err != nil {
+		return err
+	}
+	return a.refreshStatuses(ctx)
 }
 
 // GetMechanism 取机制。
