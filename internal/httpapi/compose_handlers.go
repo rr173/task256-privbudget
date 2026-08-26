@@ -7,26 +7,36 @@ import (
 )
 
 // parseRule 从查询参数或请求体解析组合规则，缺省为顺序组合。
-func parseRule(r *http.Request, body map[string]interface{}) model.CompositionRule {
+// 当显式指定了不支持的规则时返回 ErrUnknownRule，调用方据此返回参数错误，
+// 绝不静默改用其它规则并返回看似成功的预算报告。
+func parseRule(r *http.Request, body map[string]interface{}) (model.CompositionRule, error) {
 	rule := model.RuleSequential
+	provided := false
 	if v := r.URL.Query().Get("rule"); v != "" {
 		rule = model.CompositionRule(v)
+		provided = true
 	} else if body != nil {
 		if rv, ok := body["rule"].(string); ok && rv != "" {
 			rule = model.CompositionRule(rv)
+			provided = true
 		}
 	}
-	switch rule {
-	case model.RuleSequential, model.RuleAdvanced, model.RuleParallel, model.RuleRDP:
-		return rule
-	default:
-		return model.RuleSequential
+	if !provided {
+		return model.RuleSequential, nil
 	}
+	if !model.IsSupportedRule(rule) {
+		return "", model.ErrUnknownRule
+	}
+	return rule, nil
 }
 
 // evaluateBudget GET 评估当前预算（?rule=）。
 func (h *Handler) evaluateBudget(w http.ResponseWriter, r *http.Request) {
-	rule := parseRule(r, nil)
+	rule, err := parseRule(r, nil)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	rep, err := h.app.EvaluateBudget(r.Context(), rule)
 	if err != nil {
 		writeErr(w, err)
@@ -39,7 +49,11 @@ func (h *Handler) evaluateBudget(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) evaluateBudgetPost(w http.ResponseWriter, r *http.Request) {
 	var body map[string]interface{}
 	_ = readJSON(r, &body)
-	rule := parseRule(r, body)
+	rule, err := parseRule(r, body)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	rep, err := h.app.EvaluateBudget(r.Context(), rule)
 	if err != nil {
 		writeErr(w, err)

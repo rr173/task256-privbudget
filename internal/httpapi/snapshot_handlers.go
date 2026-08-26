@@ -48,7 +48,11 @@ func (h *Handler) getSnapshot(w http.ResponseWriter, r *http.Request) {
 
 // publishSnapshot 发布（冻结）草稿快照。
 func (h *Handler) publishSnapshot(w http.ResponseWriter, r *http.Request) {
-	rule := parseRule(r, nil)
+	rule, err := parseRule(r, nil)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	rep, err := h.app.PublishSnapshot(r.Context(), r.PathValue("id"), rule)
 	if err != nil {
 		writeErr(w, err)

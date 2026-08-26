@@ -19,11 +19,7 @@ func New(s *store.Store) *Service { return &Service{store: s} }
 
 // knownRule 判断组合规则是否受支持。
 func knownRule(rule model.CompositionRule) bool {
-	switch rule {
-	case model.RuleSequential, model.RuleAdvanced, model.RuleParallel, model.RuleRDP:
-		return true
-	}
-	return false
+	return model.IsSupportedRule(rule)
 }
 
 // Create 创建发布批次（默认 pending），校验引用的机制存在且规则合法。

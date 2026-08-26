@@ -28,6 +28,22 @@ const (
 	RuleRDP CompositionRule = "rdp"
 )
 
+// SupportedCompositionRules 返回服务支持的全部组合规则，作为唯一的合法集合。
+// 调用方据此判断请求的规则是否受支持，绝不可对不支持的规则静默改用其它规则。
+func SupportedCompositionRules() []CompositionRule {
+	return []CompositionRule{RuleSequential, RuleAdvanced, RuleParallel, RuleRDP}
+}
+
+// IsSupportedRule 判断组合规则是否在服务支持的合法集合内。
+func IsSupportedRule(r CompositionRule) bool {
+	for _, x := range SupportedCompositionRules() {
+		if x == r {
+			return true
+		}
+	}
+	return false
+}
+
 // Release 一次统计发布批次，引用一个机制并采用一种组合规则。
 type Release struct {
 	ID             string           `json:"id"`
